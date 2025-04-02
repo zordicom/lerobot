@@ -143,6 +143,26 @@ class DiffusionPolicy(PreTrainedPolicy):
         action = self._queues["action"].popleft()
         return action
 
+    @torch.no_grad
+    def generate_actions(self, batch: dict[str, Tensor]) -> Tensor:
+        """Generate actions given environment observations."""
+        batch = self.normalize_inputs(batch)
+        if self.config.image_features:
+            batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
+            batch["observation.images"] = torch.stack(
+                [batch[key] for key in self.config.image_features], dim=-4
+            )
+        # Note: It's important that this happens after stacking the images into a single key.
+        self._queues = populate_queues(self._queues, batch)
+
+        # stack n latest observations from the queue
+        batch = {k: torch.stack(list(self._queues[k]), dim=1) for k in batch if k in self._queues}
+        actions = self.diffusion.generate_actions(batch)
+
+        actions = self.unnormalize_outputs({"action": actions})["action"]
+
+        return actions.squeeze()
+
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, None]:
         """Run the batch through the model and compute the loss for training or validation."""
         batch = self.normalize_inputs(batch)
